@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/md5"
 	"flag"
 	"fmt"
@@ -15,9 +16,10 @@ import (
 	"time"
 
 	"github.com/elazarl/goproxy"
-	"github.com/go-redis/redis"
+	"github.com/go-redis/redis/v8"
 )
 
+var Ctx = context.Background()
 var IsDebug = false
 
 // RedisTimeout caching timeout
@@ -77,7 +79,7 @@ func main() {
 
 			injectCachingIDToRequest(req, redisKey)
 			debugReq(dump, err)
-			cachedResp, err := redisClient.Get(redisKey).Bytes()
+			cachedResp, err := redisClient.Get(Ctx, redisKey).Bytes()
 			if err != nil {
 				fmt.Println("Not found key " + redisKey + " in Redis!!!")
 			} else {
@@ -109,10 +111,10 @@ func main() {
 		respToBytes, err := httputil.DumpResponse(resp, true)
 		debugResp(respToBytes, err)
 		orPanic(err)
-		cachedResp, err := redisClient.Get(redisKey).Bytes()
+		cachedResp, err := redisClient.Get(Ctx, redisKey).Bytes()
 		_ = cachedResp
 		if err == redis.Nil || err == nil {
-			setErr := redisClient.Set(redisKey, respToBytes, RedisTimeout).Err()
+			setErr := redisClient.Set(Ctx, redisKey, respToBytes, RedisTimeout).Err()
 			orPanic(setErr)
 			fmt.Println("Set key " + redisKey + " to Redis!")
 		}
@@ -266,7 +268,7 @@ func newRedisClient() (*redis.Client, error) {
 		DB:       0,
 	})
 
-	pong, err := client.Ping().Result()
+	pong, err := client.Ping(Ctx).Result()
 	orPanic(err)
 	fmt.Println("Ping ---> Server response ", pong)
 
