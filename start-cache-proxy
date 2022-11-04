@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+function abs_script_dir_path {
+    SOURCE=$(if [ -z "${BASH_SOURCE[0]}" ]; then echo $1; else echo ${BASH_SOURCE[0]}; fi)
+    while [ -h "$SOURCE" ]; do
+      DIR=$( cd -P $( dirname "$SOURCE") && pwd )
+      SOURCE=$(readlink "$SOURCE")
+      [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+    done
+    DIR=$( cd -P $( dirname "$SOURCE" ) && pwd )
+    echo $DIR
+}
+
+PROJECT_DIR=$(abs_script_dir_path $0)
+
+# Start the proxy
+go run "${PROJECT_DIR}/proxy.go" -- "$@"
