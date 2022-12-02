@@ -11,7 +11,6 @@ import (
 	"log"
 	"net/http"
 	"net/http/httputil"
-	"os"
 	"strings"
 	"time"
 
@@ -19,47 +18,42 @@ import (
 	"github.com/go-redis/redis/v8"
 )
 
-var Ctx = context.Background()
-var IsDebug = false
+var (
+	appCtx  = context.Background()
+	isDebug = false
+	// soap action will be cached
+	// we get the action name from the request header "Soapaction"
+	// maybe you can modify it for your use case
+	soapActionKey             = "Soapaction"
+	allowedCachingSOAPActions = []string{"getList", "call", "getMessage"}
+	tobeHonoredHeaderAttrs    = []string{"x-connector-entity", "accept", "user-agent", "Content-Length", "Accept-Encoding", "Accept-Language", "Soapaction"}
+)
 
-// RedisTimeout caching timeout
-const RedisTimeout = 24 * time.Hour
-
-const XHTTPCachingRequestIDName = "X-HTTP-REQUEST-ID"
-
-// soap action will be cached
-// we get the action name from the request header "Soapaction"
-// maybe you can modify it for your use case
-var allowedCachingSOAPActions = []string{"getList", "call", "getMessage"}
-
-var tobeHonoredHeaderAttrs = []string{"x-connector-entity", "accept", "user-agent", "Content-Length", "Accept-Encoding", "Accept-Language", "Soapaction"}
-
-func orPanic(err error) {
-	if err != nil {
-		panic(err)
-	}
-}
+const (
+	// RedisTimeout caching timeout
+	RedisTimeout              = 24 * time.Hour
+	XHTTPCachingRequestIDName = "X-HTTP-REQUEST-ID"
+)
 
 func main() {
-	argsWithoutProg := os.Args[:]
-	for _, argWithoutProg := range argsWithoutProg {
-		if strings.TrimRight(argWithoutProg, "\n") == "-d" || strings.TrimRight(argWithoutProg, "\n") == "--debug" {
-			IsDebug = true
-		}
-	}
-
-	if IsDebug {
+	var (
+		debugMode = flag.Bool("d", false, "debug mode")
+		verbose   = flag.Bool("v", false, "should every proxy request be logged to stdout")
+		port      = flag.String("port", ":48080", "proxy listen address")
+	)
+	flag.Parse()
+	if *debugMode {
+		isDebug = true
 		fmt.Println("DEBUG mode ENABLED!")
 	} else {
 		fmt.Println("DEBUG mode DISABLED!")
 	}
 
 	redisClient, err := newRedisClient()
-	orPanic(err)
+	mustNil(err)
 
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.OnRequest().DoFunc(
-
 		func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 			startReqFn()
 			if !isToBeCached(req) {
@@ -79,12 +73,12 @@ func main() {
 
 			injectCachingIDToRequest(req, redisKey)
 			debugReq(dump, err)
-			cachedResp, err := redisClient.Get(Ctx, redisKey).Bytes()
+			cachedResp, err := redisClient.Get(appCtx, redisKey).Bytes()
 			if err != nil {
 				fmt.Println("Not found key " + redisKey + " in Redis!!!")
 			} else {
 				resp, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(cachedResp)), nil)
-				orPanic(err)
+				mustNil(err)
 				fmt.Println(redisKey + " found in Redis!!!")
 				endReqFn()
 				return req, resp
@@ -110,12 +104,12 @@ func main() {
 
 		respToBytes, err := httputil.DumpResponse(resp, true)
 		debugResp(respToBytes, err)
-		orPanic(err)
-		cachedResp, err := redisClient.Get(Ctx, redisKey).Bytes()
+		mustNil(err)
+		cachedResp, err := redisClient.Get(appCtx, redisKey).Bytes()
 		_ = cachedResp
 		if err == redis.Nil || err == nil {
-			setErr := redisClient.Set(Ctx, redisKey, respToBytes, RedisTimeout).Err()
-			orPanic(setErr)
+			setErr := redisClient.Set(appCtx, redisKey, respToBytes, RedisTimeout).Err()
+			mustNil(setErr)
 			fmt.Println("Set key " + redisKey + " to Redis!")
 		}
 
@@ -123,12 +117,9 @@ func main() {
 		return resp
 	})
 
-	verbose := flag.Bool("v", false, "should every proxy request be logged to stdout")
-	addr := flag.String("addr", ":48080", "proxy listen address")
-	flag.Parse()
 	proxy.Verbose = *verbose
-	fmt.Println("Start HTTP Caching Proxy on address 127.0.0.1" + *addr)
-	log.Fatal(http.ListenAndServe(*addr, proxy))
+	fmt.Println("Start HTTP Caching Proxy on address 127.0.0.1" + *port)
+	log.Fatal(http.ListenAndServe(*port, proxy))
 
 }
 
@@ -162,7 +153,7 @@ func isToBeCached(req *http.Request) bool {
 }
 
 func isAllowedCachingSOAPAction(req *http.Request) bool {
-	soapAction := req.Header.Get("Soapaction")
+	soapAction := req.Header.Get(soapActionKey)
 	soapAction = strings.Replace(soapAction, "\"", "", -1)
 	if contains(allowedCachingSOAPActions, soapAction) {
 		fmt.Println(fmt.Sprintf("SOAP action %v is allowed to be cached", soapAction))
@@ -202,7 +193,7 @@ func requestToMD5(req *http.Request) ([16]byte, bool) {
 		if req.Body != nil {
 			bodyBytes, err = io.ReadAll(req.Body)
 			if err != nil {
-				orPanic(err)
+				mustNil(err)
 				isOk = false
 			}
 		}
@@ -226,38 +217,38 @@ func debugStr(data string, err error) {
 }
 
 func debug(data []byte, err error) {
-	if !IsDebug {
+	if !isDebug {
 		return
 	}
 
 	if err == nil {
 		fmt.Printf("[DEBUG] %s\n", data)
 	} else {
-		orPanic(err)
+		mustNil(err)
 	}
 }
 
 func debugReq(data []byte, err error) {
-	if !IsDebug {
+	if !isDebug {
 		return
 	}
 
 	if err == nil {
 		fmt.Printf("[DEBUG] ----------REQUEST-----------\n%s\n\n", data)
 	} else {
-		orPanic(err)
+		mustNil(err)
 	}
 }
 
 func debugResp(data []byte, err error) {
-	if !IsDebug {
+	if !isDebug {
 		return
 	}
 
 	if err == nil {
 		fmt.Printf("[DEBUG] ----------RESPONSE-----------\n%s\n\n", data)
 	} else {
-		orPanic(err)
+		mustNil(err)
 	}
 }
 
@@ -268,9 +259,15 @@ func newRedisClient() (*redis.Client, error) {
 		DB:       0,
 	})
 
-	pong, err := client.Ping(Ctx).Result()
-	orPanic(err)
+	pong, err := client.Ping(appCtx).Result()
+	mustNil(err)
 	fmt.Println("Ping ---> Server response ", pong)
 
 	return client, err
+}
+
+func mustNil(err error) {
+	if err != nil {
+		panic(err)
+	}
 }
